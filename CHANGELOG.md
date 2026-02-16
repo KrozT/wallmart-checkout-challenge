@@ -4,8 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on **Keep a Changelog**, and this project adheres to **Semantic Versioning**.
 
-## [0.1.0] - 2026-02-15
+## [1.0.1] - 2026-02-16
+### Changed
+- Refactored `CouponController` to remove direct dependency on `CouponRepository`.
+- Moved all coupon CRUD logic (create, update, delete, get) and validation to `CouponService`.
+- Centralized entity-to-DTO mapping methods (`mapToEntity`, `mapToResponse`) within `CouponService`.
+- Updated `CouponController` to delegate operations to `CouponService` and handle exceptions (HTTP 409 Conflict) instead of raw repository calls.
 
+## [1.0.0] - 2026-02-15
 ### Added
 - Spring Boot REST API foundation for the Walmart Checkout Challenge.
 - Cart endpoints to create carts, add items, and retrieve cart details.

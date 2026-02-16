@@ -1,5 +1,7 @@
 package com.walmart.challenge.service;
 
+import com.walmart.challenge.dto.CouponRequest;
+import com.walmart.challenge.dto.CouponResponse;
 import com.walmart.challenge.entity.Coupon;
 import com.walmart.challenge.enums.CouponType;
 import com.walmart.challenge.enums.DiscountScope;
@@ -10,15 +12,12 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
- * Service encapsulating the logic for validating and applying coupon codes.
- * It ensures strict adherence to business rules regarding expiration,
- * usage limits, and stackability.
+ * Service encapsulating the logic for validating, applying, and managing coupon codes.
+ * It ensures strict adherence to business rules regarding expiration, usage limits,
+ * stackability, and data integrity.
  */
 @Service
 public class CouponService {
@@ -93,9 +92,9 @@ public class CouponService {
     /**
      * Applies the logic of the selected coupons to the order context.
      *
-     * @param coupons                The list of validated coupons.
+     * @param coupons                    The list of validated coupons.
      * @param totalAfterPromosAndPayment The subtotal after other discounts have been applied.
-     * @param shippingCostReference  A single-element array containing the calculated shipping cost (mutable).
+     * @param shippingCostReference      A single-element array containing the calculated shipping cost (mutable).
      * @return A list of DiscountDetail objects representing the applied discounts.
      */
     public List<DiscountDetail> applyCoupons(List<Coupon> coupons,
@@ -158,5 +157,127 @@ public class CouponService {
             coupon.setRemainingUses(coupon.getRemainingUses() - 1);
             couponRepository.save(coupon);
         }
+    }
+
+    /**
+     * Retrieves all available coupons in the system.
+     *
+     * @return List of coupon responses.
+     */
+    public List<CouponResponse> getAllCoupons() {
+        return couponRepository.findAll().stream()
+                .map(this::mapToResponse)
+                .toList();
+    }
+
+    /**
+     * Retrieves a specific coupon by its unique code.
+     *
+     * @param code The unique coupon code.
+     * @return An Optional containing the coupon details if found.
+     */
+    public Optional<CouponResponse> getCouponByCode(String code) {
+        return couponRepository.findByCodeIgnoreCase(code)
+                .map(this::mapToResponse);
+    }
+
+    /**
+     * Creates a new coupon resource.
+     * Enforces uniqueness on the coupon code.
+     *
+     * @param request The coupon creation data.
+     * @return The created coupon details.
+     * @throws IllegalArgumentException if the coupon code already exists.
+     */
+    public CouponResponse createCoupon(CouponRequest request) {
+        if (couponRepository.findByCodeIgnoreCase(request.getCode()).isPresent()) {
+            throw new IllegalArgumentException("Coupon code already exists");
+        }
+
+        var coupon = new Coupon();
+        mapToEntity(coupon, request);
+
+        var savedCoupon = couponRepository.save(coupon);
+        return mapToResponse(savedCoupon);
+    }
+
+    /**
+     * Updates an existing coupon.
+     * Validates that the new code does not conflict with an existing coupon (other than itself).
+     *
+     * @param code    The current code of the coupon to update.
+     * @param request The updated data.
+     * @return An Optional containing the updated coupon, or empty if not found.
+     * @throws IllegalArgumentException if the new code conflicts with another existing coupon.
+     */
+    public Optional<CouponResponse> updateCoupon(String code, CouponRequest request) {
+        var existingOpt = couponRepository.findByCodeIgnoreCase(code);
+        if (existingOpt.isEmpty()) {
+            return Optional.empty();
+        }
+
+        var existingCoupon = existingOpt.get();
+
+        // Validate code uniqueness if the code is being changed
+        boolean isCodeChanged = !existingCoupon.getCode().equalsIgnoreCase(request.getCode());
+        if (isCodeChanged && couponRepository.findByCodeIgnoreCase(request.getCode()).isPresent()) {
+            throw new IllegalArgumentException("New coupon code is already in use");
+        }
+
+        mapToEntity(existingCoupon, request);
+        var updatedCoupon = couponRepository.save(existingCoupon);
+
+        return Optional.of(mapToResponse(updatedCoupon));
+    }
+
+    /**
+     * Deletes a coupon from the system.
+     *
+     * @param code The code of the coupon to delete.
+     * @return true if the coupon was found and deleted, false otherwise.
+     */
+    public boolean deleteCoupon(String code) {
+        var couponOpt = couponRepository.findByCodeIgnoreCase(code);
+        if (couponOpt.isEmpty()) {
+            return false;
+        }
+
+        couponRepository.delete(couponOpt.get());
+        return true;
+    }
+    
+    /**
+     * Internal helper to map request data to the entity.
+     * Handles default values for boolean flags and nullable fields.
+     */
+    private void mapToEntity(Coupon coupon, CouponRequest req) {
+        coupon.setCode(req.getCode());
+        coupon.setDescription(req.getDescription());
+        coupon.setCouponType(req.getCouponType());
+        coupon.setPercentage(req.getPercentage());
+        coupon.setAmount(req.getAmount());
+        coupon.setRemainingUses(req.getRemainingUses());
+        coupon.setExpiry(req.getExpiry());
+
+        // Apply defaults for boolean flags
+        coupon.setActive(req.getActive() != null ? req.getActive() : true);
+        coupon.setStackable(req.getStackable() != null ? req.getStackable() : true);
+    }
+
+    /**
+     * Internal helper to map the entity to the API response DTO.
+     */
+    private CouponResponse mapToResponse(Coupon coupon) {
+        var resp = new CouponResponse();
+        resp.setCode(coupon.getCode());
+        resp.setDescription(coupon.getDescription());
+        resp.setCouponType(coupon.getCouponType());
+        resp.setPercentage(coupon.getPercentage());
+        resp.setAmount(coupon.getAmount());
+        resp.setActive(coupon.isActive());
+        resp.setStackable(coupon.isStackable());
+        resp.setRemainingUses(coupon.getRemainingUses());
+        resp.setExpiry(coupon.getExpiry());
+        return resp;
     }
 }

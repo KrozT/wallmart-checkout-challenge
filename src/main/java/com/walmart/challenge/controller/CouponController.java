@@ -2,8 +2,7 @@ package com.walmart.challenge.controller;
 
 import com.walmart.challenge.dto.CouponRequest;
 import com.walmart.challenge.dto.CouponResponse;
-import com.walmart.challenge.entity.Coupon;
-import com.walmart.challenge.repository.CouponRepository;
+import com.walmart.challenge.service.CouponService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,7 +16,7 @@ import java.util.List;
 /**
  * REST controller responsible for the lifecycle management of coupons.
  * It provides endpoints to create, retrieve, update, and delete coupons,
- * ensuring strict adherence to unique constraints and data integrity.
+ * delegating business logic and persistence to the CouponService.
  */
 @RestController
 @RequestMapping("/v1/coupons")
@@ -25,7 +24,7 @@ import java.util.List;
 @Slf4j
 public class CouponController {
 
-    private final CouponRepository couponRepository;
+    private final CouponService couponService;
 
     /**
      * Retrieves all available coupons in the system.
@@ -35,11 +34,7 @@ public class CouponController {
      */
     @GetMapping
     public ResponseEntity<List<CouponResponse>> getAll() {
-        var coupons = couponRepository.findAll().stream()
-                .map(this::mapToResponse)
-                .toList();
-
-        return ResponseEntity.ok(coupons);
+        return ResponseEntity.ok(couponService.getAllCoupons());
     }
 
     /**
@@ -51,17 +46,16 @@ public class CouponController {
      */
     @GetMapping("/{code}")
     public ResponseEntity<CouponResponse> getByCode(@PathVariable String code) {
-        return couponRepository.findByCodeIgnoreCase(code)
-                .map(this::mapToResponse)
+        return couponService.getCouponByCode(code)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     /**
      * Creates a new coupon resource.
-     * This operation enforces uniqueness on the coupon code. If a conflict is detected,
-     * a 409 Conflict status is returned. Upon success, a 201 Created status
-     * is returned with the Location header pointing to the new resource.
+     * This operation enforces uniqueness on the coupon code via the service layer.
+     * If a conflict is detected, a 409 Conflict status is returned.
+     * Upon success, a 201 Created status is returned with the Location header.
      *
      * @param request The coupon creation data.
      * @return The created coupon details.
@@ -70,30 +64,26 @@ public class CouponController {
     public ResponseEntity<CouponResponse> create(@Valid @RequestBody CouponRequest request) {
         log.info("REST request to create coupon: {}", request.getCode());
 
-        if (couponRepository.findByCodeIgnoreCase(request.getCode()).isPresent()) {
+        try {
+            CouponResponse response = couponService.createCoupon(request);
+
+            URI location = ServletUriComponentsBuilder.fromCurrentRequest()
+                    .path("/{code}")
+                    .buildAndExpand(response.getCode())
+                    .toUri();
+
+            return ResponseEntity.created(location).body(response);
+
+        } catch (IllegalArgumentException e) {
             log.warn("Attempted to create duplicate coupon code: {}", request.getCode());
             return ResponseEntity.status(409).build();
         }
-
-        var coupon = new Coupon();
-        mapToEntity(coupon, request);
-
-        var savedCoupon = couponRepository.save(coupon);
-        var response = mapToResponse(savedCoupon);
-
-        URI location = ServletUriComponentsBuilder.fromCurrentRequest()
-                .path("/{code}")
-                .buildAndExpand(savedCoupon.getCode())
-                .toUri();
-
-        return ResponseEntity.created(location).body(response);
     }
 
     /**
      * Updates an existing coupon.
      * This method allows modification of all coupon fields, including the code itself.
-     * It validates that the new code does not conflict with an existing coupon
-     * other than the one being updated.
+     * It validates that the new code does not conflict with an existing coupon.
      *
      * @param code    The current code of the coupon to update.
      * @param request The updated data.
@@ -104,24 +94,15 @@ public class CouponController {
                                                  @Valid @RequestBody CouponRequest request) {
         log.info("REST request to update coupon: {}", code);
 
-        var existingOpt = couponRepository.findByCodeIgnoreCase(code);
-        if (existingOpt.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
+        try {
+            return couponService.updateCoupon(code, request)
+                    .map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
 
-        var existingCoupon = existingOpt.get();
-
-        // Validate code uniqueness if the code is being changed
-        boolean isCodeChanged = !existingCoupon.getCode().equalsIgnoreCase(request.getCode());
-        if (isCodeChanged && couponRepository.findByCodeIgnoreCase(request.getCode()).isPresent()) {
-            log.warn("Conflict detected: New code {} is already in use", request.getCode());
+        } catch (IllegalArgumentException e) {
+            log.warn("Conflict detected during update: {}", e.getMessage());
             return ResponseEntity.status(409).build();
         }
-
-        mapToEntity(existingCoupon, request);
-        var updatedCoupon = couponRepository.save(existingCoupon);
-
-        return ResponseEntity.ok(mapToResponse(updatedCoupon));
     }
 
     /**
@@ -135,47 +116,9 @@ public class CouponController {
     public ResponseEntity<Void> delete(@PathVariable String code) {
         log.info("REST request to delete coupon: {}", code);
 
-        var couponOpt = couponRepository.findByCodeIgnoreCase(code);
-        if (couponOpt.isEmpty()) {
-            return ResponseEntity.notFound().build();
+        if (couponService.deleteCoupon(code)) {
+            return ResponseEntity.noContent().build();
         }
-
-        couponRepository.delete(couponOpt.get());
-        return ResponseEntity.noContent().build();
-    }
-
-    /**
-     * Internal helper to map request data to the entity.
-     * Handles default values for boolean flags and nullable fields.
-     */
-    private void mapToEntity(Coupon coupon, CouponRequest req) {
-        coupon.setCode(req.getCode());
-        coupon.setDescription(req.getDescription());
-        coupon.setCouponType(req.getCouponType());
-        coupon.setPercentage(req.getPercentage());
-        coupon.setAmount(req.getAmount());
-        coupon.setRemainingUses(req.getRemainingUses());
-        coupon.setExpiry(req.getExpiry());
-
-        // Apply defaults for boolean flags
-        coupon.setActive(req.getActive() != null ? req.getActive() : true);
-        coupon.setStackable(req.getStackable() != null ? req.getStackable() : true);
-    }
-
-    /**
-     * Internal helper to map the entity to the API response DTO.
-     */
-    private CouponResponse mapToResponse(Coupon coupon) {
-        var resp = new CouponResponse();
-        resp.setCode(coupon.getCode());
-        resp.setDescription(coupon.getDescription());
-        resp.setCouponType(coupon.getCouponType());
-        resp.setPercentage(coupon.getPercentage());
-        resp.setAmount(coupon.getAmount());
-        resp.setActive(coupon.isActive());
-        resp.setStackable(coupon.isStackable());
-        resp.setRemainingUses(coupon.getRemainingUses());
-        resp.setExpiry(coupon.getExpiry());
-        return resp;
+        return ResponseEntity.notFound().build();
     }
 }
